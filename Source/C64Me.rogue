@@ -1,0 +1,188 @@
+#================================================================================
+# C64Me.rogue
+# April 26, 2021
+#================================================================================
+
+$requireRogue "1.8.1"
+
+uses Utility/CommandLineParser
+uses Bitmap
+
+try
+  C64Me( System.command_line_arguments )
+catch (error:Error)
+  local w = Console.width.or_smaller( 80 )
+  Console.error.println "="*w
+  Console.error.println "ERROR"
+  Console.error.println error->String.word_wrapped(w-2).indented(2)
+  Console.error.println "="*w
+  System.exit 1
+endTry
+
+class C64Me
+  PROPERTIES
+    color_frequency = Table<<Int32,Int32>>()
+    top_colors      = Color[]
+
+  METHODS
+    method init( args:String[] )
+      local command = CommandLineParser().
+      [
+        # option( "--flag", &alias="-f" )
+        # option( "--setting=",  &alias="-s" )
+      ].parse( System.command_line_arguments )
+
+      if (command//args.is_empty)
+        println @|USAGE
+        println "  $ filename.png/jpg [filename2.png/jpg ...]" (File.filename(System.executable_filepath))
+        println @|
+                 |DESCRIPTION
+                 |  For input "filename.png", output "filename-c64.png" will be created, etc. 
+        System.exit 1
+      endIf
+
+      forEach (arg in command//args)
+        convert( arg )
+      endForEach
+
+      #{
+      forEach (color in C64Palette.colors)
+        println "$ <> $" (color,HSB(color))
+      endForEach
+      }#
+
+    method convert( filepath:String )
+      local bmp = Bitmap( File(filepath) )
+
+      local scale_x = 320.0 / bmp.size.x
+      local scale_y = 200.0 / bmp.size.y
+      local scale_to_fill = scale_x.or_larger( scale_y )
+      bmp.resize( Int32(bmp.width*scale_to_fill), Int32(bmp.height*scale_to_fill) )
+      local bmp320x200 = Bitmap( 320, 200 )
+      bmp.blit( bmp320x200, 160-Int32(bmp.width/2), 100-Int32(bmp.height/2) )
+      bmp = bmp320x200
+      #bmp.resize(160,200)
+
+      local pixels = Color[]
+      forEach (j in 0..<25)
+        forEach (i in 0..<40)
+          pixels.clear
+          get_tile( bmp, i, j, pixels )
+          process( pixels )
+          set_tile( bmp, i, j, pixels )
+        endForEach
+      endForEach
+
+      #bmp.resize(320,200)
+
+      local filename = File.filename( filepath ).before_last( "." ) + "-64.png"
+      println "Writing $" (filename)
+      File.save( "$/$" (File.path(filepath),filename), bmp.to_png_bytes )
+
+    method process( pixels:Color[] )
+      color_frequency.clear
+      color_frequency[ (forEach in 0..<16) ] = 0
+
+      forEach (original_color at src_i in pixels)
+        local best_match    : Int32?
+        local best_distance : Real64
+        forEach (c64_color at i in C64Palette.colors)
+          local distance = color_distance( original_color, c64_color )
+          if (not best_match or distance < best_distance)
+            best_match = i 
+            best_distance = distance
+          endIf
+        endForEach
+
+        pixels[src_i] = C64Palette.colors[best_match.value]
+        #++color_frequency[best_match.value]
+      endForEach
+
+      #{
+      color_frequency.sort( (a,b) => a.value >= b.value )
+
+      local entry = color_frequency.first_entry
+      loop 4
+        if (entry.value == 0) escapeLoop
+        top_colors.add( C64Palette.colors[entry.key] )
+        entry .= next_entry
+      endLoop
+
+      # Remap using top 4 colors only (lots of optimization possible)
+      forEach (original_color at i in pixels)
+        local best_match    : Color?
+        local best_distance : Real64
+        forEach (c64_color in top_colors)
+          local distance = color_distance( original_color, c64_color )
+          if (not best_match or distance < best_distance)
+            best_match = c64_color
+            best_distance = distance
+          endIf
+        endForEach
+
+        pixels[i] = best_match.value
+      endForEach
+      }#
+
+    method color_distance( c1:Color, c2:Color )->Real64
+      local rgb, hsb : Real64
+
+      block
+        local r = c1.red - c2.red
+        local g = c1.green - c2.green
+        local b = c1.blue - c2.blue
+        rgb = r*r + g*g + b*b
+      endBlock
+
+      block c1 = HSB(c1), c2 = HSB(c2)
+        local h = Degrees(c1.hue).delta_to(Degrees(c2.hue)).value.abs / 180.0
+        local s = (c1.saturation - c2.saturation).abs
+        local b = (c1.brightness - c2.brightness).abs
+        hsb = h*h + s*s + b*b
+      endBlock
+
+      return rgb
+
+    method get_tile( bmp:Bitmap, i:Int32, j:Int32, pixels:Color[] )
+      forEach (jj in 0..<8)
+        forEach (ii in 0..<8)
+          pixels.add( bmp[XY(i*8+ii,j*8+jj)] )
+        endForEach
+      endForEach
+
+    method set_tile( bmp:Bitmap, i:Int32, j:Int32, pixels:Color[] )
+      local index = 0
+      forEach (jj in 0..<8)
+        forEach (ii in 0..<8)
+          bmp[XY(i*8+ii,j*8+jj)] = pixels[index]
+          ++index
+        endForEach
+      endForEach
+
+endClass
+
+class C64Palette
+  # From: https://www.c64-wiki.com/wiki/Color
+  DEFINITIONS
+    BLACK       = Color(0xFF000000)
+    WHITE       = Color(0xFFFFFFFF)
+    RED         = Color(0xFF880000)
+    CYAN        = Color(0xFFAAFFEE)
+    VIOLET      = Color(0xFFCC44CC)
+    GREEN       = Color(0xFF00CC55)
+    BLUE        = Color(0xFF0000AA)
+    YELLOW      = Color(0xFFEEEE77)
+    ORANGE      = Color(0xFFDD8855)
+    BROWN       = Color(0xFF664400)
+    LIGHT_RED   = Color(0xFFFF7777)
+    DARK_GREY   = Color(0xFF333333)
+    GREY        = Color(0xFF777777)
+    LIGHT_GREEN = Color(0xFFAAFF66)
+    LIGHT_BLUE  = Color(0xFF0088FF)
+    LIGHT_GREY  = Color(0xFFBBBBBB)
+
+  GLOBAL PROPERTIES
+    colors = Color[][ BLACK, WHITE, RED, CYAN, VIOLET, GREEN, BLUE, YELLOW,
+               ORANGE, BROWN, LIGHT_RED, DARK_GREY, GREY, LIGHT_GREEN, LIGHT_BLUE, LIGHT_GREY ]
+endClass
+
