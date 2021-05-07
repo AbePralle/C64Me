@@ -4,9 +4,14 @@ Work-in-progress. Currently reshapes photos to be 320x200 and converts every pix
 
 # Test Images
 
-Original                 |RGB                               |HSB                               | Source
--------------------------|----------------------------------|----------------------------------|--------------------
-![Image 1](Images/1.jpg) | ![Image 1 RGB](Images/1-rgb.png) | ![Image 1 HSB](Images/1-hsb.png) | Unknown
-![Image 2](Images/2.jpg) | ![Image 2 RGB](Images/2-rgb.png) | ![Image 2 HSB](Images/2-hsb.png) | IG: [queennataliang](https://www.instagram.com/queennataliang)
-![Image 3](Images/3.jpg) | ![Image 3 RGB](Images/3-rgb.png) | ![Image 3 HSB](Images/3-hsb.png) | Personal photo
+Original                 |Simple Color Mapping              |Advanced Color Mapping
+-------------------------|----------------------------------|-----------------------------
+![Image 1](Images/1.jpg) | ![Simple](Images/1-c64-a.png) | ![Advanced](Images/1-c64-b.png)
+![Image 2](Images/2.jpg) | ![Simple](Images/2-c64-a.png) | ![Advanced](Images/2-c64-b.png)
+![Image 3](Images/3.jpg) | ![Simple](Images/3-c64-a.png) | ![Advanced](Images/3-c64-b.png)
+![Image 4](Images/4.jpg) | ![Simple](Images/4-c64-a.png) | ![Advanced](Images/4-c64-b.png)
+![Image 5](Images/5.jpg) | ![Simple](Images/5-c64-a.png) | ![Advanced](Images/5-c64-b.png)
+![Image 6](Images/6.jpg) | ![Simple](Images/6-c64-a.png) | ![Advanced](Images/6-c64-b.png)
+![Image 7](Images/7.jpg) | ![Simple](Images/7-c64-a.png) | ![Advanced](Images/7-c64-b.png)
+![Image 8](Images/8.jpg) | ![Simple](Images/8-c64-a.png) | ![Advanced](Images/8-c64-b.png)
 

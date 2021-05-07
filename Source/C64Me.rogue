@@ -19,9 +19,207 @@ catch (error:Error)
   System.exit 1
 endTry
 
-#class C64Me
-#endClass
+class C64Me
+  METHODS
+    method init( args:String[] )
+      if (args.is_empty)
+        println @|USAGE
+        println "  $ filename.png/jpg [filename2.png/jpg ...]" (File.filename(System.executable_filepath))
+      else
+        forEach (arg in args)
+          convert( arg, "Tests" )  # FIXME
+        endForEach
+      endIf
 
+    method convert( filepath:String, output_filepath=null:String )
+      local bmp = Bitmap(File(filepath))
+      println "$ [$x$]" (filepath,bmp.width,bmp.height)
+
+      bmp = convert( bmp )
+
+      contingent
+        if (output_filepath)
+          sufficient (not File.is_folder(output_filepath))
+          output_filepath = File.join( output_filepath, File.filename(filepath) )
+        else
+          output_filepath = filepath
+        endIf
+        output_filepath .= before_first('.')
+        local filename = File.filename( filepath )
+        if (filename.to_lowercase == filename) output_filepath += "-c64-b.png"
+        else                                   output_filepath += "-C64-b.png"
+      endContingent
+
+      println "  -> $" (output_filepath)
+      File.save( output_filepath, bmp.to_png_bytes )
+
+    method convert( bmp:Bitmap )->Bitmap
+      local scale_x = 320.0 / bmp.size.x
+      local scale_y = 200.0 / bmp.size.y
+      local scale_to_fill = scale_x.or_larger( scale_y )
+      bmp.resize( Int32(bmp.width*scale_to_fill), Int32(bmp.height*scale_to_fill) )
+      bmp.crop( 320, 200, Anchor.CENTER )
+
+      local c64_bmp = C64Bitmap( bmp )
+
+      return c64_bmp->Bitmap
+
+endClass
+
+enum C64Color( color:Color )
+  # From: https://www.c64-wiki.com/wiki/Color
+  BLACK       (Color(0xFF000000))
+  WHITE       (Color(0xFFFFFFFF))
+  RED         (Color(0xFF880000))
+  CYAN        (Color(0xFFAAFFEE))
+  VIOLET      (Color(0xFFCC44CC))
+  GREEN       (Color(0xFF00CC55))
+  BLUE        (Color(0xFF0000AA))
+  YELLOW      (Color(0xFFEEEE77))
+  ORANGE      (Color(0xFFDD8855))
+  BROWN       (Color(0xFF664400))
+  LIGHT_RED   (Color(0xFFFF7777))
+  DARK_GREY   (Color(0xFF333333))
+  GREY        (Color(0xFF777777))
+  LIGHT_GREEN (Color(0xFFAAFF66))
+  LIGHT_BLUE  (Color(0xFF0088FF))
+  LIGHT_GREY  (Color(0xFFBBBBBB))
+
+  GLOBAL PROPERTIES
+    palette = C64Color[][ BLACK, WHITE, RED, CYAN, VIOLET, GREEN, BLUE, YELLOW, ORANGE, BROWN,
+                          LIGHT_RED, DARK_GREY, GREY, LIGHT_GREEN, LIGHT_BLUE, LIGHT_GREY ]
+endEnum
+
+class RGB( red:Real64, green:Real64, blue:Real64 ) [compound]
+  GLOBAL METHODS
+    method create( color:Color )->RGB
+      return RGB( color.red, color.green, color.blue )
+
+  METHODS
+    method best_match( wr=1:Real64, wg=1:Real64, wb=1:Real64 )->C64Color
+      local best : C64Color?
+      local smallest_distance : Real64
+      forEach (c64 in C64Color.palette)
+        local cur_distance = distance( c64, wr, wg, wb )
+        if (not best or cur_distance < smallest_distance)
+          best = c64
+          smallest_distance = cur_distance
+        endIf
+      endForEach
+      return best.value
+
+    method description->String
+      return "RGB($,$,$)" (red.format(".2"),green.format(".2"),blue.format(".2"))
+
+    method distance( c64:C64Color, wr=1:Real64, wg=1:Real64, wb=1:Real64 )->Real64
+      local c64_color = c64.color
+      local r = wr * (red   - c64_color.red)
+      local g = wg * (green - c64_color.green)
+      local b = wb * (blue  - c64_color.blue)
+      return r*r + g*g + b*b
+
+    method operator+( other:RGB )->RGB
+      return RGB( red+other.red, green+other.green, blue+other.blue )
+
+    method operator-( other:RGB )->RGB
+      return RGB( red-other.red, green-other.green, blue-other.blue )
+
+    method operator*( value:Real64 )->RGB
+      return RGB( red*value, green*value, blue*value )
+
+    method to->C64Color
+      local simple = false
+      if (simple)
+        return best_match
+      else
+        local y = best_match( 1.2, 1.2, 0.4 )  # best match emphasizing yellows
+        local b = best_match( 1.2, 0.8, 1.2 )  # blues
+        local g = best_match( 0.8, 0.4, 0.4 )  # greens
+
+        if (b == C64Color.CYAN or b == C64Color.LIGHT_BLUE)   return b
+        if (b == C64Color.BLUE or b == C64Color.VIOLET)       return b
+        if (g == C64Color.GREEN or g == C64Color.LIGHT_GREEN) return g
+        if (y == C64Color.VIOLET) return b
+        if (y == C64Color.YELLOW)
+          if (b == C64Color.YELLOW or b == C64Color.ORANGE) return y
+          if (g == C64Color.YELLOW or g == C64Color.ORANGE) return y
+          return b
+        endIf
+        return y
+      endIf
+
+    method to->String
+      return description
+endClass
+
+class C64Bitmap
+  PROPERTIES
+    width, height : Int32
+    pixels        : C64Color[]
+    error         : RGB[]
+
+  METHODS
+    method init( bitmap:Bitmap )
+      width = bitmap.width
+      height = bitmap.height
+      pixels = Dim<<C64Color>>( width * height )
+      error  = Dim<<RGB>>( (width+2) * (height+1) )
+
+      local src_data  = bitmap.pixels.data
+      local src_i     = 0
+      local src_w     = width
+      local dest_data = pixels.data
+      local err_data  = error.data
+      local err_i     = 1
+      local err_w     = width + 2
+      loop height/2  # assumes even number of lines
+        # Left to Right
+        loop width
+          local original = RGB( src_data[src_i] )
+          local c64  = (original + err_data[err_i])->C64Color
+          local diff = original - RGB(c64.color)
+          err_data[ err_i+1 ]         = diff * (7.0/16.0)
+          err_data[ err_i+(err_w-1) ] = diff * (3.0/16.0)
+          err_data[ err_i+err_w ]     = diff * (5.0/16.0)
+          err_data[ err_i+(err_w+1) ] = diff * (1.0/16.0)
+          dest_data[ src_i ] = c64
+          ++src_i
+          ++err_i
+        endLoop
+        src_i += (src_w - 1)
+        err_i += (err_w - 1)
+
+        # Right to Left
+        loop width
+          local original = RGB( src_data[src_i] )
+          local c64  = (original + err_data[err_i])->C64Color
+          local diff = original - RGB(c64.color)
+          err_data[ err_i-1 ]         = diff * (7.0/16.0)
+          err_data[ err_i+(err_w+1) ] = diff * (3.0/16.0)
+          err_data[ err_i+err_w ]     = diff * (5.0/16.0)
+          err_data[ err_i+(err_w-1) ] = diff * (1.0/16.0)
+          dest_data[ src_i ] = c64
+          --src_i
+          --err_i
+        endLoop
+        src_i += src_w + 1
+        err_i += err_w + 1
+      endLoop
+
+      #forEach (color in bitmap.pixels)
+      #  pixels.add( RGB(color)->C64Color )
+      #endForEach
+
+    method to->Bitmap
+      local result = Bitmap( width, height )
+      local dest = result.pixels.data
+      forEach (c64 at i in pixels)
+        dest[i] = c64.color
+      endForEach
+      return result
+endClass
+
+#{
 class C64Me
   PROPERTIES
     color_frequency = Table<<Int32,Int32>>()
@@ -282,3 +480,4 @@ class C64Palette
       return y
 endClass
 
+}#
