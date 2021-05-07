@@ -46,8 +46,8 @@ class C64Me
         endIf
         output_filepath .= before_first('.')
         local filename = File.filename( filepath )
-        if (filename.to_lowercase == filename) output_filepath += "-c64-b.png"
-        else                                   output_filepath += "-C64-b.png"
+        if (filename.to_lowercase == filename) output_filepath += "-c64-c.png"
+        else                                   output_filepath += "-C64-c.png"
       endContingent
 
       println "  -> $" (output_filepath)
@@ -59,10 +59,14 @@ class C64Me
       local scale_to_fill = scale_x.or_larger( scale_y )
       bmp.resize( Int32(bmp.width*scale_to_fill), Int32(bmp.height*scale_to_fill) )
       bmp.crop( 320, 200, Anchor.CENTER )
+      bmp.resize( 160, 200 )
 
       local c64_bmp = C64Bitmap( bmp )
+      c64_bmp.convert_to_multicolor_bitmap
 
-      return c64_bmp->Bitmap
+      local result = c64_bmp->Bitmap
+      result.resize( 320, 200 )
+      return result
 
 endClass
 
@@ -96,10 +100,10 @@ class RGB( red:Real64, green:Real64, blue:Real64 ) [compound]
       return RGB( color.red, color.green, color.blue )
 
   METHODS
-    method best_match( wr=1:Real64, wg=1:Real64, wb=1:Real64 )->C64Color
+    method best_match( wr=1:Real64, wg=1:Real64, wb=1:Real64, palette=C64Color.palette:C64Color[] )->C64Color
       local best : C64Color?
       local smallest_distance : Real64
-      forEach (c64 in C64Color.palette)
+      forEach (c64 in palette)
         local cur_distance = distance( c64, wr, wg, wb )
         if (not best or cur_distance < smallest_distance)
           best = c64
@@ -127,10 +131,9 @@ class RGB( red:Real64, green:Real64, blue:Real64 ) [compound]
     method operator*( value:Real64 )->RGB
       return RGB( red*value, green*value, blue*value )
 
-    method to->C64Color
-      local simple = false
-      if (simple)
-        return best_match
+    method to->C64Color( palette=null:C64Color[] )
+      if (palette)
+        return best_match( &=palette )
       else
         local y = best_match( 1.2, 1.2, 0.4 )  # best match emphasizing yellows
         local b = best_match( 1.2, 0.8, 1.2 )  # blues
@@ -206,9 +209,93 @@ class C64Bitmap
         err_i += err_w + 1
       endLoop
 
-      #forEach (color in bitmap.pixels)
-      #  pixels.add( RGB(color)->C64Color )
-      #endForEach
+    method convert_to_multicolor_bitmap
+      local freq = Dim<<Int32>>(16)
+      forEach (c in pixels) ++freq[c->Int32]
+      local most_common       = 0
+      local most_common_count = freq[0]
+      forEach (count at index in freq)
+        if (count > most_common_count)
+          most_common = index
+          most_common_count = count
+        endIf
+      endForEach
+      local bg_color = most_common
+
+      local palette = Dim<<C64Color>>(4)
+      local src_data = pixels.data
+      local freq_data = freq.data
+      local remap = Dim<<Int32>>(16)
+      forEach (y in 0..<height/8)
+        forEach (x in 0..<width/4)
+
+          # Count color frequency of current 4x8 tile
+          freq[ forEach in 0..15 ] = 0
+          local src_i = y*160+x
+          loop 8
+            local i = src_data[src_i]->Int32
+            ++freq_data[ i ]
+            i = src_data[src_i+1]->Int32
+            ++freq_data[ i ]
+            i = src_data[src_i+2]->Int32
+            ++freq_data[ i ]
+            i = src_data[src_i+3]->Int32
+            ++freq_data[ i ]
+            src_i += 156
+          endLoop
+
+          forEach (i in 0..15) remap[i] = i
+
+          # BG color is the same for every tile so zero out that count
+          freq[ bg_color ] = 0
+          remap[ bg_color ] = bg_color
+
+          # Get 3 other most common colors per tile
+          local a = remove_highest( freq )
+          local b = remove_highest( freq )
+          local c = remove_highest( freq )
+          remap[ a ] = a
+          remap[ b ] = b
+          remap[ c ] = c
+
+          # For each other color used, precalculate the mapping to one of the used colors
+          palette.clear
+          palette.[ add bg_color, add a, add b, add c ]
+          forEach (n at i in freq)
+            if (n) remap[i] = RGB(C64Color(i).color)->C64Color( palette )->Int32
+          endForEach
+
+          # Remap the pixels
+          local remap_data = remap.data
+          src_i = y*160+x
+          loop 8
+            local c64 = src_data[src_i]->Int32
+            src_data[src_i] = remap[c64]
+            c64 = src_data[src_i+1]->Int32
+            src_data[src_i] = remap[c64]
+            c64 = src_data[src_i+2]->Int32
+            src_data[src_i] = remap[c64]
+            c64 = src_data[src_i+3]->Int32
+            src_data[src_i] = remap[c64]
+            src_i += 156
+          endLoop
+
+        endForEach
+      endForEach
+
+    method remove_highest( freq:Int32[] )->Int32
+      local freq_data = freq.data
+      local highest_index = 0
+      local highest_count = freq_data[0]
+      forEach (index in 1..15)
+        local n = freq_data[index]
+        if (n > highest_count)
+          highest_count = n
+          highest_index = index
+        endIf
+      endForEach
+      freq_data[highest_index] = 0
+      return highest_index
 
     method to->Bitmap
       local result = Bitmap( width, height )
@@ -219,265 +306,3 @@ class C64Bitmap
       return result
 endClass
 
-#{
-class C64Me
-  PROPERTIES
-    color_frequency = Table<<Int32,Int32>>()
-    top_colors      = Color[]
-    weight_1        = 1.0
-    weight_2        = 1.0
-    weight_3        = 1.0
-
-  METHODS
-    method init( args:String[] )
-      forEach (arg in args)
-        convert( arg )
-      endForEach
-      #{
-      local greens  = Bitmap(File("Best/1-rgb-0.8-0.4-0.4.png"))
-      local blues   = Bitmap(File("Best/1-rgb-1.2-0.8-1.2.png"))
-      local yellows = Bitmap(File("Best/1-rgb-1.2-1.2-0.4.png"))
-
-      local result = Bitmap(320,200)
-      forEach (i of result.pixels)
-        local g = greens.pixels[i]
-        local b = blues.pixels[i]
-        local y = yellows.pixels[i]
-        result.pixels[i] = C64Palette.combine( y, b, g )
-      endForEach
-
-      File.save( "Best/1-output.png", result.to_png_bytes )
-      }#
-
-
-      #{
-      local command = CommandLineParser().
-      [
-        # option( "--flag", &alias="-f" )
-        # option( "--setting=",  &alias="-s" )
-      ].parse( System.command_line_arguments )
-
-      if (command//args.is_empty)
-        println @|USAGE
-        println "  $ filename.png/jpg [filename2.png/jpg ...]" (File.filename(System.executable_filepath))
-        println @|
-                 |DESCRIPTION
-                 |  For input "filename.png", output "filename-c64.png" will be created, etc.
-        System.exit 1
-      endIf
-
-      forEach (arg in command//args)
-        convert( arg )
-      endForEach
-      }#
-
-      #{
-      forEach (color in C64Palette.colors)
-        println "$ <> $" (color,HSB(color))
-      endForEach
-      }#
-
-    method convert( filepath:String )
-      local base_name = File.filename( filepath ).before_last('.')
-
-      local bmp = Bitmap( File(filepath) )
-      local scale_x = 320.0 / bmp.size.x
-      local scale_y = 200.0 / bmp.size.y
-      local scale_to_fill = scale_x.or_larger( scale_y )
-      bmp.resize( Int32(bmp.width*scale_to_fill), Int32(bmp.height*scale_to_fill) )
-      local bmp320x200 = Bitmap( 320, 200 )
-      bmp.blit( bmp320x200, 160-Int32(bmp.width/2), 100-Int32(bmp.height/2) )
-      bmp = bmp320x200
-      #bmp.resize(160,200)
-      File.save( "Variations/$-original.png"(base_name), bmp.to_png_bytes )
-
-      local bmp_y = convert( filepath, bmp, 1.2, 1.2, 0.4 )
-      local bmp_b = convert( filepath, bmp, 0.4, 0.8, 1.2 )
-      local bmp_g = convert( filepath, bmp, 0.8, 0.4, 0.4 )
-      local bmp_output = combine( bmp_y, bmp_b, bmp_g )
-
-      File.save( "Variations/$-rgb-1.2-1.2-0.4.png"(base_name), bmp_y.to_png_bytes )
-      File.save( "Variations/$-rgb-0.4-0.8-1.2.png"(base_name), bmp_b.to_png_bytes )
-      File.save( "Variations/$-rgb-0.8-0.4-0.4.png"(base_name), bmp_g.to_png_bytes )
-      File.save( "Variations/$-output.png"(base_name), bmp_output.to_png_bytes )
-
-    method combine( yellows:Bitmap, blues:Bitmap, greens:Bitmap )->Bitmap
-      local result = Bitmap(320,200)
-      forEach (i of result.pixels)
-        local y = yellows.pixels[i]
-        local b = blues.pixels[i]
-        local g = greens.pixels[i]
-        result.pixels[i] = C64Palette.combine( y, b, g )
-      endForEach
-      return result
-
-    method convert( filepath:String, bmp:Bitmap, wr:Real64, wg:Real64, wb:Real64 )->Bitmap
-      bmp .= cloned
-      weight_1 = wr
-      weight_2 = wg
-      weight_3 = wb
-      local pixels = Color[]
-      forEach (j in 0..<25)
-        forEach (i in 0..<40)
-          pixels.clear
-          get_tile( bmp, i, j, pixels )
-          process( pixels )
-          set_tile( bmp, i, j, pixels )
-        endForEach
-      endForEach
-
-      return bmp
-
-      #local filename = File.filename( filepath ).before_last( "." ) +
-      #"-rgb-$-$-$.png"(weight_1.format(".1"),weight_2.format(".1"),weight_3.format(".1"))
-      #println "Writing $" (filename)
-      #File.save( "$/$" (File.path(filepath),filename), bmp.to_png_bytes )
-
-    method process( pixels:Color[] )
-      color_frequency.clear
-      color_frequency[ (forEach in 0..<16) ] = 0
-
-      forEach (original_color at src_i in pixels)
-        local best_match    : Int32?
-        local best_distance : Real64
-        forEach (c64_color at i in C64Palette.colors)
-          local distance = rgb_color_distance( original_color, c64_color )
-          if (not best_match or distance < best_distance)
-            best_match = i
-            best_distance = distance
-          endIf
-        endForEach
-
-        pixels[src_i] = C64Palette.colors[best_match.value]
-        #++color_frequency[best_match.value]
-      endForEach
-
-      #{
-      color_frequency.sort( (a,b) => a.value >= b.value )
-
-      local entry = color_frequency.first_entry
-      loop 4
-        if (entry.value == 0) escapeLoop
-        top_colors.add( C64Palette.colors[entry.key] )
-        entry .= next_entry
-      endLoop
-
-      # Remap using top 4 colors only (lots of optimization possible)
-      forEach (original_color at i in pixels)
-        local best_match    : Color?
-        local best_distance : Real64
-        forEach (c64_color in top_colors)
-          local distance = color_distance( original_color, c64_color )
-          if (not best_match or distance < best_distance)
-            best_match = c64_color
-            best_distance = distance
-          endIf
-        endForEach
-
-        pixels[i] = best_match.value
-      endForEach
-      }#
-
-    method rgb_color_distance( c1:Color, c2:Color )->Real64
-      local rgb : Real64
-
-      block
-        local r = c1.red - c2.red
-        local g = c1.green - c2.green
-        local b = c1.blue - c2.blue
-        r *= weight_1
-        g *= weight_2
-        b *= weight_3
-        rgb = r*r + g*g + b*b
-      endBlock
-
-      return rgb
-
-    method hsb_color_distance( c1:Color, c2:Color )->Real64
-      local hsb : Real64
-
-      block c1 = HSB(c1), c2 = HSB(c2)
-        local h = (Degrees(c1.hue).delta_to(Degrees(c2.hue)).value.abs / 180.0)
-        local s = (c1.saturation - c2.saturation).abs
-        local b = (c1.brightness - c2.brightness).abs * 2
-        h *= weight_1
-        s *= weight_2
-        b *= weight_3
-        hsb = h*h + s*s + b*b
-      endBlock
-
-      return hsb
-
-    method get_tile( bmp:Bitmap, i:Int32, j:Int32, pixels:Color[] )
-      forEach (jj in 0..<8)
-        forEach (ii in 0..<8)
-          pixels.add( bmp[XY(i*8+ii,j*8+jj)] )
-        endForEach
-      endForEach
-
-    method set_tile( bmp:Bitmap, i:Int32, j:Int32, pixels:Color[] )
-      local index = 0
-      forEach (jj in 0..<8)
-        forEach (ii in 0..<8)
-          bmp[XY(i*8+ii,j*8+jj)] = pixels[index]
-          ++index
-        endForEach
-      endForEach
-
-endClass
-
-class C64Palette
-  # From: https://www.c64-wiki.com/wiki/Color
-  DEFINITIONS
-    BLACK       = Color(0xFF000000)
-    WHITE       = Color(0xFFFFFFFF)
-    RED         = Color(0xFF880000)
-    CYAN        = Color(0xFFAAFFEE)
-    VIOLET      = Color(0xFFCC44CC)
-    GREEN       = Color(0xFF00CC55)
-    BLUE        = Color(0xFF0000AA)
-    YELLOW      = Color(0xFFEEEE77)
-    ORANGE      = Color(0xFFDD8855)
-    BROWN       = Color(0xFF664400)
-    LIGHT_RED   = Color(0xFFFF7777)
-    DARK_GREY   = Color(0xFF333333)
-    GREY        = Color(0xFF777777)
-    LIGHT_GREEN = Color(0xFFAAFF66)
-    LIGHT_BLUE  = Color(0xFF0088FF)
-    LIGHT_GREY  = Color(0xFFBBBBBB)
-
-    BLK = Color(0xFF000000)
-    WHT = Color(0xFFFFFFFF)
-    RED = Color(0xFF880000)
-    CYN = Color(0xFFAAFFEE)
-    VIO = Color(0xFFCC44CC)
-    GRN = Color(0xFF00CC55)
-    BLU = Color(0xFF0000AA)
-    YEL = Color(0xFFEEEE77)
-    ORA = Color(0xFFDD8855)
-    BRN = Color(0xFF664400)
-    LRD = Color(0xFFFF7777)
-    DGY = Color(0xFF333333)
-    GRY = Color(0xFF777777)
-    LGN = Color(0xFFAAFF66)
-    LBL = Color(0xFF0088FF)
-    LGR = Color(0xFFBBBBBB)
-
-  GLOBAL PROPERTIES
-    colors = Color[][ BLACK, WHITE, RED, CYAN, VIOLET, GREEN, BLUE, YELLOW,
-               ORANGE, BROWN, LIGHT_RED, DARK_GREY, GREY, LIGHT_GREEN, LIGHT_BLUE, LIGHT_GREY ]
-
-  GLOBAL METHODS
-    method combine( y:Color, b:Color, g:Color )->Color
-      if (b == CYN or b == LBL or b == BLU or b == VIO) return b
-      if (g == GRN or g == LGN) return g
-      if (y == VIO) return b
-      if (y == YEL)
-        if (b == YEL or b == ORA) return y
-        if (g == YEL or g == ORA) return y
-        else                      return b
-      endIf
-      return y
-endClass
-
-}#
