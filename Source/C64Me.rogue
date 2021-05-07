@@ -22,14 +22,38 @@ endTry
 class C64Me
   METHODS
     method init( args:String[] )
-      if (args.is_empty)
-        println @|USAGE
-        println "  $ filename.png/jpg [filename2.png/jpg ...]" (File.filename(System.executable_filepath))
+      local command = CommandLineParser().
+      [
+        option( "--help",    &aliases=["-h","-?"] )
+        option( "--output=", &alias="-o" )
+        on_unknown( this=>print_usage )
+      ].parse( args )
+
+      if (command//options//help)
+        print_usage
+        return
+      endIf
+
+      if (command//args.is_empty)
+        print_usage
       else
-        forEach (arg in args)
-          convert( arg, "Tests" )  # FIXME
+        local output = command//options//output->String
+        if (output == "") output = null
+        forEach (arg in command//args)
+          convert( arg, output )
         endForEach
       endIf
+
+    method print_usage
+      println @|USAGE
+               |  c64me filename.png/jpg [filename2 ...] [options]
+               |
+               |OPTIONS
+               |  --help, -h, -?
+               |    Display this help text.
+               |
+               |  --output=<filepath>, -o <filepath>
+               |    Write the converted image or images to the specified file or folder.
 
     method convert( filepath:String, output_filepath=null:String )
       local bmp = Bitmap(File(filepath))
@@ -46,8 +70,8 @@ class C64Me
         endIf
         output_filepath .= before_first('.')
         local filename = File.filename( filepath )
-        if (filename.to_lowercase == filename) output_filepath += "-c64-c.png"
-        else                                   output_filepath += "-C64-c.png"
+        if (filename.to_lowercase == filename) output_filepath += "-c64.png"
+        else                                   output_filepath += "-C64.png"
       endContingent
 
       println "  -> $" (output_filepath)
@@ -231,7 +255,7 @@ class C64Bitmap
 
           # Count color frequency of current 4x8 tile
           freq[ forEach in 0..15 ] = 0
-          local src_i = y*160+x
+          local src_i = (y*8)*160+(x*4)
           loop 8
             local i = src_data[src_i]->Int32
             ++freq_data[ i ]
@@ -241,7 +265,7 @@ class C64Bitmap
             ++freq_data[ i ]
             i = src_data[src_i+3]->Int32
             ++freq_data[ i ]
-            src_i += 156
+            src_i += 160
           endLoop
 
           forEach (i in 0..15) remap[i] = i
@@ -267,17 +291,17 @@ class C64Bitmap
 
           # Remap the pixels
           local remap_data = remap.data
-          src_i = y*160+x
+          src_i = (y*8)*160+(x*4)
           loop 8
             local c64 = src_data[src_i]->Int32
             src_data[src_i] = remap[c64]
             c64 = src_data[src_i+1]->Int32
-            src_data[src_i] = remap[c64]
+            src_data[src_i+1] = remap[c64]
             c64 = src_data[src_i+2]->Int32
-            src_data[src_i] = remap[c64]
+            src_data[src_i+2] = remap[c64]
             c64 = src_data[src_i+3]->Int32
-            src_data[src_i] = remap[c64]
-            src_i += 156
+            src_data[src_i+3] = remap[c64]
+            src_i += 160
           endLoop
 
         endForEach
